@@ -49,7 +49,8 @@ export default function HomePage() {
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {notes.map((note) => (
-              <div
+              <Link
+                href={`/edit/${note.id}`}
                 key={note.id}
                 className="animate-popIn rounded-2xl border border-gray-100 bg-white/95 p-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-md"
               >
@@ -68,7 +69,7 @@ export default function HomePage() {
                 <p className="text-[11px] text-gray-300">
                   {timeAgo(note.updatedAt)}
                 </p>
-              </div>
+              </Link>
             ))}
           </div>
         )}
