@@ -17,14 +17,16 @@ export interface Note {
 
 export interface ProCode {
   code: string;
-  expiresAt: number;
+  expiresAt: number | null;
+  maxUses: number | null;
+  usedCount: number;
   createdAt: number;
 }
 
 interface RedeemResult {
   ok: boolean;
-  reason?: "expired" | "invalid";
-  expiresAt?: number;
+  reason?: "expired" | "invalid" | "full";
+  expiresAt?: number | null;
 }
 
 interface JotState {
@@ -35,10 +37,14 @@ interface JotState {
   email: string;
   customTheme: string | null;
   generatedCodes: ProCode[];
+  adminEmails: string[];
   addNote: (note: Omit<Note, "id" | "createdAt" | "updatedAt">) => void;
+  updateNote: (id: string, updates: Partial<Omit<Note, "id" | "createdAt">>) => void;
+  getNote: (id: string) => Note | undefined;
   redeemCode: (code: string) => RedeemResult;
-  generateCode: (days: number) => ProCode;
+  generateCode: (opts: { code: string; days: number | null; maxUses: number | null }) => { ok: boolean; reason?: string };
   loginWithEmail: (email: string) => void;
+  addAdminEmail: (email: string) => void;
   setTheme: (base64: string) => void;
   clearTheme: () => void;
   bumpStreak: () => void;
@@ -46,13 +52,6 @@ interface JotState {
 }
 
 const PERMANENT_CODES = ["JOTNOTE-FREE", "PRO2026", "KRUFAINUM"];
-
-function genCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let s = "";
-  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return `PRO-${s}`;
-}
 
 export const useJotStore = create<JotState>()(
   persist(
@@ -64,6 +63,7 @@ export const useJotStore = create<JotState>()(
       email: "",
       customTheme: null,
       generatedCodes: [],
+      adminEmails: ["ghduern3@gmail.com"],
 
       addNote: (note) => {
         const now = Date.now();
@@ -76,32 +76,64 @@ export const useJotStore = create<JotState>()(
         set({ notes: [newNote, ...get().notes] });
       },
 
+      updateNote: (id, updates) => {
+        set({
+          notes: get().notes.map((n) =>
+            n.id === id ? { ...n, ...updates, updatedAt: Date.now() } : n
+          ),
+        });
+      },
+
+      getNote: (id) => get().notes.find((n) => n.id === id),
+
       redeemCode: (code: string): RedeemResult => {
         const clean = code.trim().toUpperCase();
         if (PERMANENT_CODES.includes(clean)) {
           set({ isPro: true, proExpiresAt: null });
-          return { ok: true };
+          return { ok: true, expiresAt: null };
         }
-        const found = get().generatedCodes.find((c) => c.code === clean);
-        if (!found) return { ok: false, reason: "invalid" };
-        if (found.expiresAt < Date.now()) return { ok: false, reason: "expired" };
-        set({ isPro: true, proExpiresAt: found.expiresAt });
+        const codes = get().generatedCodes;
+        const idx = codes.findIndex((c) => c.code === clean);
+        if (idx === -1) return { ok: false, reason: "invalid" };
+        const found = codes[idx];
+        if (found.expiresAt && found.expiresAt < Date.now()) {
+          return { ok: false, reason: "expired" };
+        }
+        if (found.maxUses !== null && found.usedCount >= found.maxUses) {
+          return { ok: false, reason: "full" };
+        }
+        const nextCodes = [...codes];
+        nextCodes[idx] = { ...found, usedCount: found.usedCount + 1 };
+        set({ generatedCodes: nextCodes, isPro: true, proExpiresAt: found.expiresAt });
         return { ok: true, expiresAt: found.expiresAt };
       },
 
-      generateCode: (days: number): ProCode => {
+      generateCode: ({ code, days, maxUses }) => {
+        const clean = code.trim().toUpperCase();
+        if (!clean) return { ok: false, reason: "empty" };
+        if (get().generatedCodes.some((c) => c.code === clean) || PERMANENT_CODES.includes(clean)) {
+          return { ok: false, reason: "duplicate" };
+        }
         const newCode: ProCode = {
-          code: genCode(),
-          expiresAt: Date.now() + days * 24 * 60 * 60 * 1000,
+          code: clean,
+          expiresAt: days ? Date.now() + days * 24 * 60 * 60 * 1000 : null,
+          maxUses: maxUses,
+          usedCount: 0,
           createdAt: Date.now(),
         };
         set({ generatedCodes: [newCode, ...get().generatedCodes] });
-        return newCode;
+        return { ok: true };
       },
 
       loginWithEmail: (email: string) => {
         const trialExpiry = Date.now() + 7 * 24 * 60 * 60 * 1000;
-        set({ email, isPro: true, proExpiresAt: trialExpiry });
+        set({ email: email.trim().toLowerCase(), isPro: true, proExpiresAt: trialExpiry });
+      },
+
+      addAdminEmail: (email: string) => {
+        const clean = email.trim().toLowerCase();
+        if (!clean || get().adminEmails.includes(clean)) return;
+        set({ adminEmails: [...get().adminEmails, clean] });
       },
 
       setTheme: (base64: string) => set({ customTheme: base64 }),
